@@ -6,6 +6,16 @@ hardware path to actually achieve the goal. Details below.
 
 Investigated 2026-06-23 on an Apple Silicon Mac (macOS 15 / Darwin 25.5.0).
 
+> **UPDATE (same day, after more info):** the user clarified (a) the dongle is a
+> **driver-free Wi-Fi 6 "AX900" + BT 5.3** adapter — i.e. a Realtek **RTL8851BU**
+> (`rtw89`), **not** an RTL88x2 as first guessed — and (b) it will actually be
+> used on a **Rockchip RK3308 Linux** device (the "Ato" appliance), not the Mac.
+> That changes the analysis: on Linux the dongle *does* work as a NIC, and there's
+> a second sensing path (beamforming-feedback / BFLD) I'd initially overlooked.
+> Full revised verdict in **§8** below; run **`test_dongle_csi.sh`** on the
+> Rockchip to settle it empirically. Bottom line is unchanged for the stated
+> goal: **heartrate through this dongle is still not feasible.**
+
 ---
 
 ## 1. What is actually plugged into the Mac
@@ -129,3 +139,69 @@ with skepticism; treat the extractor code as a solid, runnable foundation.
   work as WiFi on Apple Silicon macOS. macOS gives no CSI from *any* adapter.
 - RuView's vitals extractors **run on this Mac today** (proven with synthetic CSI).
 - To make it real: add a **~$9 ESP32-S3** as the CSI source over USB serial.
+
+---
+
+## 8. UPDATE — corrected chip (RTL8851BU/AX900), the Rockchip, and the BFI path
+
+**The dongle:** a "driver-free Wi-Fi 6 AX900 + BT 5.3" adapter = Realtek
+**RTL8851BU** (1×1 802.11ax + BT 5.3), driven by **`rtw89`**. The `0bda:1a2b` ID
+is its CD-ROM/driver-disk mode; `usb_modeswitch -KW -v 0bda -p 1a2b` flips it to a
+WiFi NIC. (TP-Link's "AX900" adapter is the same RTL8851BU.)
+
+**The host:** Rockchip **RK3308** Linux appliance (Yocto / `meta-ato`, kernel
+6.12). Its build already ships `rtl8851bu-firmware` + `rtw89` modules, so the
+dongle comes up as a normal NIC there (it couldn't on macOS).
+
+### Calibrated verdict (the honest confidence breakdown)
+
+| Capability | Via this dongle? | Confidence | Why |
+|---|---|---|---|
+| **Heartrate / breathing** | **No** | ~85% | Needs raw per-packet CSI. `rtw89` exposes none; Realtek never shipped a CSI tool; no community patch exists. The one CSI-free workaround (BFI, below) doesn't reach heartrate. |
+| Raw CSI as a client (ESP32-grade) | No | ~90% | Driver/firmware wall, not physics. |
+| **Presence / motion** | **Maybe** | ~40–55% | Possible via **BFI** — *if* `rtw89` gives this chip monitor mode (historically weak for rtw89). |
+
+### The BFI / BFLD path (the nuance the original §2 missed)
+
+**Beamforming Feedback Information (BFI):** 802.11ac/ax clients send *compressed
+beamforming reports* to the AP in **plaintext action frames**. Any card in
+**monitor mode** can sniff them — no CSI firmware required. RuView ships exactly
+this as the **`wifi-densepose-bfld`** crate (ADR-118): it ingests BFI and emits
+`presence` / `motion` / `person_count` / `zone_activity` (MQTT `…/bfld/presence`,
+HA entities). **Note what's absent: no breathing, no heartrate** — BFI is low-rate
+and heavily quantized, so it's a presence/motion layer by design. Even RuView's
+own BFI path does not claim vitals.
+
+Two gates remain for using *this* dongle even for presence:
+1. `rtw89` must actually grant the RTL8851BU **monitor mode** (unconfirmed; rtw89
+   monitor support is patchy — the solid monitor-mode Realtek chips are the older
+   RTL8812AU on the aircrack-ng fork, not the Wi-Fi-6 ones).
+2. There must be 802.11ac/ax **beamforming traffic** in the room to sniff.
+
+Run **`test_dongle_csi.sh`** (this folder) on the Rockchip — it mode-switches,
+checks for a CSI debugfs node (Path A) and for working monitor mode (Path B), and
+prints a hardware-derived verdict instead of these probabilities.
+
+### What RuView itself supports (authoritative — from the repo's `CLAUDE.md`)
+
+RuView's **Supported Hardware** table lists **no USB WiFi dongle**. Its sanctioned
+sensors are:
+
+| Device | Role | Cost |
+|---|---|---|
+| **ESP32-S3** | WiFi CSI sensing node | ~$9 |
+| **ESP32-C6 + Seeed MR60BHA2** | **mmWave HR/BR/presence** + WiFi CSI | ~$15 |
+| HLK-LD2410 | 24 GHz presence + distance | ~$3 |
+
+And rvCSI's only *real*-CSI adapter is **Nexmon on Broadcom (BCM43455, Raspberry
+Pi)** — again, not a Realtek USB dongle.
+
+### Recommendation for the Ato RK3308 (since heartrate is essential)
+The dongle stays as the device's **network** link. For **vitals**, add a dedicated
+sensor over UART/USB that does its own DSP (keeping the weak RK3308 idle):
+- **ESP32-C6 + MR60BHA2 (60 GHz mmWave), ~$15** — best heartrate/breathing
+  reliability for a shipping elder-care product; RuView lists it explicitly.
+- **ESP32-S3 (WiFi CSI), ~$9** — RuView's native path; cheaper; noisier vitals.
+
+Either streams `presence/BR/HR` that `ato-device` forwards to `ato-server`,
+fitting the existing polling architecture with ~zero added CPU load.
