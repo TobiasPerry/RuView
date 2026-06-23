@@ -205,3 +205,56 @@ sensor over UART/USB that does its own DSP (keeping the weak RK3308 idle):
 
 Either streams `presence/BR/HR` that `ato-device` forwards to `ato-server`,
 fitting the existing polling architecture with ~zero added CPU load.
+
+---
+
+## 9. MEASURED ON HARDWARE (live test on `ato001`, the RK3308)
+
+The §8 table was prediction. Here are the **measurements**, taken over SSH on the
+actual device with the dongle attached:
+
+- **Dongle, confirmed:** `lsusb` → `0bda:b851 Realtek 802.11ax WLAN Adapter`
+  (mode-switched from `1a2b`), driver **`rtw89_8851bu`**, interface `wlan0`,
+  associated to the AP (HE-MCS / Wi-Fi 6, RSSI ≈ −36 dBm). Chip = **RTL8851BU**,
+  exactly as predicted.
+
+- **HEARTRATE / CSI — confirmed impossible.** The `rtw89` debugfs
+  (`/sys/kernel/debug/ieee80211/phy0/rtw89/`) exposes `phy_info`, `mac_reg_dump`,
+  `read_rf`, `rf_reg_dump`, `stations`, `txpwr_table`, … but **no `csi`,
+  `chan_info`, `phy_sts`, or `beamform` node**. No per-packet CSI is available →
+  no heartbeat-grade signal. This is now verified on the chip, not inferred.
+
+- **Monitor mode — supported but unusable here.** `iw phy phy0 info` lists
+  `* monitor` in supported modes (good!), but the **valid interface
+  combinations** are `#{managed}≤1, #{AP,P2P}≤1, total≤2` — monitor is **not
+  combinable** with managed. And `ip route` shows the device's *only* uplink is
+  `wlan0` (the dongle itself). So entering monitor mode (for the BFI/BFLD path)
+  drops the device offline. Not usable for continuous sensing without a 2nd radio.
+
+- **COARSE PRESENCE / MOTION — works, online, no extra hardware.** `rtw89`'s
+  `phy_info` exposes a live, fluctuating **RSSI (raw + dBm), EVM, and SNR** for the
+  connected link. A 20 s poll at 2 Hz (staying online the whole time) measured:
+
+  | metric | mean | σ | range |
+  |---|---|---|---|
+  | RSSI raw | 146.4 | 2.5 | 141–150 (Δ9) |
+  | RSSI dBm | −37.0 | 1.4 | −40…−35 (Δ5 dB) |
+  | EVM | 26.6 | 2.3 | 23.3–32.8 (Δ9.5) |
+  | SNR | 38.8 | 1.6 | 36–41 |
+
+  That variance is the environment modulating the link — it spikes when a person
+  moves through it. **`dongle_presence.py`** (this folder) turns it into a
+  calibrated motion/presence detector; validated running live on `ato001`.
+
+### Final, measured verdict for the stated goal
+
+| Goal | Through this dongle, on this device | Status |
+|---|---|---|
+| **Heart rate** | **No** | hard driver/chip limit — no CSI |
+| **Breathing** | No (not realistically) | same |
+| **Presence / motion (coarse)** | **Yes** — `dongle_presence.py`, online, no extra HW | works today |
+
+So: the dongle **can** give you coarse presence/motion right now, but **cannot**
+give heart rate on any host. For heart rate on Ato, add an **ESP32-C6 + MR60BHA2
+(mmWave, ~$15)** or **ESP32-S3 (CSI, ~$9)** over USB — both fit `ato-device`'s
+existing sensor→server flow.

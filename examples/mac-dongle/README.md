@@ -13,6 +13,12 @@ Mac — can I use RuView to detect people's presence and heart rate through it?"
   the CSI source (which an ESP32 supplies in a real deployment).
 - **`probe_dongle.sh`** — reusable macOS probe that inventories USB/WiFi state and
   prints the CSI-feasibility verdict for whatever dongle is attached.
+- **`test_dongle_csi.sh`** — run ON a Linux host (e.g. the Rockchip): mode-switches
+  the dongle, checks for a CSI debugfs node (heartrate path) and working monitor
+  mode (BFI/presence path), prints a hardware-derived verdict.
+- **`dongle_presence.py`** — a WORKING coarse presence/motion detector that uses the
+  dongle's live RSSI/EVM (rtw89 `phy_info`) with no monitor mode and no extra
+  hardware. Validated live on the Ato RK3308. Detects motion, NOT vitals.
 
 ## Quickstart
 
